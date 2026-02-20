@@ -1,0 +1,170 @@
+import pymupdf
+import pandas as pd
+import os
+import re
+
+ruta1 = r"D:\DOCUMENTOS\EJESA\Modelo1\Ejesa Casa 2025-07.pdf"
+ruta2 = r"D:\DOCUMENTOS\EJESA\Modelo1\Casa 89367_2025-06.pdf"
+carpeta = r"D:\DOCUMENTOS\EJESA\Modelo1"
+
+area_1 = {"x1": 29.9369,"x2":449.9219,"y1": 30.7525,"y2":199.2825,"width":419.985,"height":154.53}
+area_2 = {"x1":454.5119,"x2":585.3269,"y1": 30.7525,"y2":198.5175,"width":130.815,"height":153.76}
+area_3 = {"x1":208.3619,"x2":590.0919,"y1":190.3425,"y2":270.1925,"width":380.730,"height":80.00}
+area_4 = {"x1":306.1019,"x2":588.3869,"y1":274.2525,"y2":482.3325,"width":282.285,"height":208.08}
+
+rect_1 = pymupdf.Rect(area_1["x1"], area_1["y1"],area_1["x2"],area_1["y2"])
+rect_2 = pymupdf.Rect(area_2["x1"], area_2["y1"],area_2["x2"],area_2["y2"])
+rect_3 = pymupdf.Rect(area_3["x1"], area_3["y1"],area_3["x2"],area_3["y2"])
+rect_4 = pymupdf.Rect(area_4["x1"], area_4["y1"],area_4["x2"],area_4["y2"])
+
+import unicodedata
+
+# Función para quitar tildes/acentos
+def quitar_tildes(texto: str) -> str:
+    if not isinstance(texto, str):
+        return texto
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', texto)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+def buscar_texto(lista: list[str], TextoBuscado, Posicion) -> str | None:
+    for i, texto in enumerate(lista):
+        if TextoBuscado.upper() in texto.upper():  # uso upper() para evitar problemas de mayúsculas/minúsculas
+            if i + 1 < len(lista):      # verifico que exista un elemento siguiente
+                return lista[i+Posicion].strip()
+    return None
+def buscar_patron(lista: list[str],patron) -> str | None:
+    for linea in lista:
+        match = re.search(patron, linea)
+        if match:
+            return match.group()
+    return None
+
+
+### CREACION DE UNA FUNCION PROCESAR FACTURA ###
+
+def procesar_factura(ruta_pdf):
+    # Abrir PDF
+    doc = pymupdf.open(ruta_pdf)
+    pagina = doc[0]
+
+    # Extraer texto de las áreas definidas
+    cuadro_1 = pagina.get_text("text", clip=rect_1)
+    cuadro_2 = pagina.get_text("text", clip=rect_2)
+    cuadro_3 = pagina.get_text("words", clip=rect_3)
+    cuadro_4 = pagina.get_text("words", clip=rect_4)
+
+    # Convertir a listas
+    Lista_box1 = cuadro_1.split("\n")
+    Lista_box2 = cuadro_2.split("\n")
+
+    Lista_resumen = [(tupla[5], 1, tupla[4]) for tupla in cuadro_3]
+    df = pd.DataFrame(Lista_resumen, columns=['Fila', 'Col', 'Valor'])
+    df = df.pivot_table(index='Fila', columns='Col', values='Valor',
+                        aggfunc=lambda x: ' '.join(str(v) for v in x))
+    Lista_box3 = df[1].tolist()
+
+    # Datos del proveedor
+    titular = buscar_texto(Lista_box1, "TITULAR", 1)
+    DNIcuit = buscar_texto(Lista_box1, "CUIT", 0).split("CUIT")[1].split("ACTIVIDAD")[0].strip()
+    nro_factura = buscar_patron(Lista_box1, r"\d{2}-\d{8}")
+    periodo = buscar_patron(Lista_box2, r"\d{2}/\d{4}")
+    servicio = buscar_texto(Lista_box2, "SERVICIO", 1)
+    vencimiento = buscar_texto(Lista_box2, "VENCIMIENTO", 1)
+    total_ejesa = buscar_texto(Lista_box2, "EJESA", 1)
+    total_agua = buscar_texto(Lista_box2, "APYSJ", 1)
+    total_pagar = buscar_texto(Lista_box2, "PAGAR", 1)
+
+    # Datos de la medición
+    fecha_anterior = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[1]
+    fecha_actual = buscar_texto(Lista_box3,"ACTUAL",0).split(" ")[1]
+    dias_medicion = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[1]
+    med_anterior = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[2]
+    med_actual = buscar_texto(Lista_box3,"ACTUAL",0).split(" ")[2]
+    consumo = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[2]
+    tipo_tarifa = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[-1]
+    consumo_facturado = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[-1]
+
+    # Detalle de la factura
+    Lista_box4 = [(round(tupla[3]*1.5/10), 1 if tupla[2] < 500 else 2, tupla[4]) for tupla in cuadro_4]
+    tb1 = pd.DataFrame(Lista_box4, columns=['Fila', 'Col', 'Valor'])
+    tb2 = tb1.pivot_table(index='Fila', columns='Col', values='Valor',
+                          aggfunc=lambda x: ' '.join(str(v) for v in x)).reset_index()
+    tb2[1] = tb2[1].apply(quitar_tildes)
+    tb2["Grupo"] = tb2[1].apply(
+        lambda x: (
+            "REDONDEO" if isinstance(x, str) and "AJUSTE POR REDONDEO" in x.upper()
+            else x if isinstance(x, str) and x.upper() == "ENERGIA ELECTRICA" and "SUBTOTAL" not in x #else x if isinstance(x, str) and x.upper() == x and "SUBTOTAL" not in x
+            else x if isinstance(x, str) and x.upper() == "TASAS E IMPUESTOS" and "SUBTOTAL" not in x
+            else x if isinstance(x, str) and x.upper() == "OTROS CARGOS" and "SUBTOTAL" not in x
+            else None
+        )
+    )
+    tb2["Grupo"] = tb2["Grupo"].ffill()
+
+    tb_filtrado = tb2[(~tb2[1].str.contains("TOTAL|ENERGIA|OTROS|TASAS", case=True, na=False)) & (tb2[2].str.match(r"^\s*-?\d+[.,]?\d*\s*$", na=False)) ]
+    df_liq = tb_filtrado[["Grupo", 1, 2]]
+    df_liq.columns = ["Grupo", "Concepto", "Importe"]
+
+    # Diccionario final
+    factura_dict = {
+        "titular": titular,
+        "DNIcuit": DNIcuit,
+        "nro_factura": nro_factura,
+        "periodo": periodo,
+        "servicio": servicio,
+        "vencimiento": vencimiento,
+        "total_ejesa": total_ejesa,
+        "total_agua": total_agua,
+        "total_pagar": total_pagar,
+        "fecha_anterior": fecha_anterior,
+        "fecha_actual": fecha_actual,
+        "dias_medicion": dias_medicion,
+        "med_anterior": med_anterior,
+        "med_actual": med_actual,
+        "consumo": consumo,
+        "tipo_tarifa": tipo_tarifa,
+        "consumo_facturado": consumo_facturado,
+        "detalle_liquidacion": df_liq.to_dict(orient="records")
+    }
+
+    return factura_dict
+
+
+resultados = []
+for archivo in os.listdir(carpeta):
+    if archivo.endswith(".pdf"):
+        ruta = os.path.join(carpeta, archivo)
+        print(archivo)
+        factura = procesar_factura(ruta)
+        resultados.append(factura)
+df_final = pd.DataFrame(resultados)
+
+# 1. Explode: cada diccionario se convierte en una fila
+df_exploded = df_final.explode("detalle_liquidacion")
+# 2. Normalizar: convertir los diccionarios en columnas
+df_detalle = pd.json_normalize(df_exploded["detalle_liquidacion"])
+# 3. Combinar con las demás columnas
+df_facturas = pd.concat([df_exploded.drop(columns=["detalle_liquidacion"]), df_detalle], axis=1)
+
+
+df_facturas["Precio"] = df_facturas.apply(
+    lambda row: (
+        float(re.search(r"([\d.,]+)\s*\$/kWh", row["Concepto"], flags=re.IGNORECASE).group(1).replace(",", "."))
+        if re.search(r"([\d.,]+)\s*\$/kWh", row["Concepto"], flags=re.IGNORECASE)
+        else float(re.search(r"([\d.,]+)%", row["Concepto"]).group(1).replace(",", "."))
+        if re.search(r"([\d.,]+)%", row["Concepto"])
+        else float(row["Importe"].replace(",","."))   # aquí usamos el valor de la columna Importe
+    ),
+    axis=1
+)
+
+df_facturas["Cantidad"] = df_facturas.apply(
+    lambda row: (
+        row["consumo_facturado"].replace(",",".")
+        if re.search(r"([\d.,]+)\s*\$/kWh", row["Concepto"], flags=re.IGNORECASE)
+        else 1  
+    ),
+    axis=1
+)
