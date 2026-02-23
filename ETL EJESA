@@ -3,6 +3,8 @@ import pandas as pd
 import os
 import re
 
+carpeta = r"C:\DOCUMENTOS\EJESA"
+
 area_1 = {"x1": 29.9369,"x2":449.9219,"y1": 30.7525,"y2":199.2825,"width":419.985,"height":154.53}
 area_2 = {"x1":454.5119,"x2":585.3269,"y1": 30.7525,"y2":198.5175,"width":130.815,"height":153.76}
 area_3 = {"x1":208.3619,"x2":590.0919,"y1":190.3425,"y2":270.1925,"width":380.730,"height":80.00}
