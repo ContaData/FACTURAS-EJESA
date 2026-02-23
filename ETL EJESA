@@ -3,19 +3,19 @@ import pandas as pd
 import os
 import re
 
-ruta1 = r"D:\DOCUMENTOS\EJESA\Modelo1\Ejesa Casa 2025-07.pdf"
-ruta2 = r"D:\DOCUMENTOS\EJESA\Modelo1\Casa 89367_2025-06.pdf"
-carpeta = r"D:\DOCUMENTOS\EJESA\Modelo1"
-
 area_1 = {"x1": 29.9369,"x2":449.9219,"y1": 30.7525,"y2":199.2825,"width":419.985,"height":154.53}
 area_2 = {"x1":454.5119,"x2":585.3269,"y1": 30.7525,"y2":198.5175,"width":130.815,"height":153.76}
 area_3 = {"x1":208.3619,"x2":590.0919,"y1":190.3425,"y2":270.1925,"width":380.730,"height":80.00}
 area_4 = {"x1":306.1019,"x2":588.3869,"y1":274.2525,"y2":482.3325,"width":282.285,"height":208.08}
+area_5 = {"x1":212.77,"x2":587.62,"y1":575.66,"y2":652.92,"width":374.85,"height":77.265}
+area_6 = {"x1":306.86,"x2":580.73,"y1":646.03,"y2":854.12,"width":273.87,"height":208.08}
 
 rect_1 = pymupdf.Rect(area_1["x1"], area_1["y1"],area_1["x2"],area_1["y2"])
 rect_2 = pymupdf.Rect(area_2["x1"], area_2["y1"],area_2["x2"],area_2["y2"])
 rect_3 = pymupdf.Rect(area_3["x1"], area_3["y1"],area_3["x2"],area_3["y2"])
 rect_4 = pymupdf.Rect(area_4["x1"], area_4["y1"],area_4["x2"],area_4["y2"])
+rect_5 = pymupdf.Rect(area_5["x1"], area_5["y1"],area_5["x2"],area_5["y2"])
+rect_6 = pymupdf.Rect(area_6["x1"], area_6["y1"],area_6["x2"],area_6["y2"])
 
 import unicodedata
 
@@ -40,7 +40,9 @@ def buscar_patron(lista: list[str],patron) -> str | None:
         if match:
             return match.group()
     return None
-
+def encontrar_concepto(Lista, TextoBuscar, PosicionTexto):
+    concepto = [ x for x in Lista if TextoBuscar in x ][0].split(" ")[PosicionTexto].strip()
+    return concepto
 
 ### CREACION DE UNA FUNCION PROCESAR FACTURA ###
 
@@ -76,21 +78,20 @@ def procesar_factura(ruta_pdf):
     total_agua = buscar_texto(Lista_box2, "APYSJ", 1)
     total_pagar = buscar_texto(Lista_box2, "PAGAR", 1)
 
-    # Datos de la medición
+    # Datos de la factura medicion
     fecha_anterior = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[1]
     fecha_actual = buscar_texto(Lista_box3,"ACTUAL",0).split(" ")[1]
     dias_medicion = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[1]
     med_anterior = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[2]
     med_actual = buscar_texto(Lista_box3,"ACTUAL",0).split(" ")[2]
-    consumo = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[2]
+    consumo = encontrar_concepto(Lista_box3,"DIFERENCIA",2)
     tipo_tarifa = buscar_texto(Lista_box3,"ANTERIOR",0).split(" ")[-1]
-    consumo_facturado = [x for x in Lista_box3 if isinstance(x, str) and len(x) > 2][-1].split(" ")[-1]
+    consumo_facturado = encontrar_concepto(Lista_box3,"DIFERENCIA",-1)
 
     # Detalle de la factura
-    Lista_box4 = [(round(tupla[3]*1.5/10), 1 if tupla[2] < 500 else 2, tupla[4]) for tupla in cuadro_4]
+    Lista_box4 = [ ( round(tupla[3]*1.5/10), 1 if tupla[2] < 500 else 2, tupla[4] ) for tupla in cuadro_4]
     tb1 = pd.DataFrame(Lista_box4, columns=['Fila', 'Col', 'Valor'])
-    tb2 = tb1.pivot_table(index='Fila', columns='Col', values='Valor',
-                          aggfunc=lambda x: ' '.join(str(v) for v in x)).reset_index()
+    tb2 = tb1.pivot_table(index='Fila', columns='Col', values='Valor', aggfunc=lambda x: ' '.join(str(v) for v in x)).reset_index()
     tb2[1] = tb2[1].apply(quitar_tildes)
     tb2["Grupo"] = tb2[1].apply(
         lambda x: (
@@ -103,9 +104,66 @@ def procesar_factura(ruta_pdf):
     )
     tb2["Grupo"] = tb2["Grupo"].ffill()
 
-    tb_filtrado = tb2[(~tb2[1].str.contains("TOTAL|ENERGIA|OTROS|TASAS", case=True, na=False)) & (tb2[2].str.match(r"^\s*-?\d+[.,]?\d*\s*$", na=False)) ]
-    df_liq = tb_filtrado[["Grupo", 1, 2]]
-    df_liq.columns = ["Grupo", "Concepto", "Importe"]
+    tb_filtrado = tb2[(~tb2[1].str.contains("TOTAL|ENERGIA|OTROS|TASAS", case=True, na=False)) & (tb2[2].str.match(r"^\s*-?\d+[.,]?\d*\s*$", na=False))]
+    df_liq_ejesa = tb_filtrado[["Grupo",1, 2]]
+    df_liq_ejesa.columns = ["Grupo", "Concepto", "Importe"]
+    df_liq_ejesa["Emp_serv"]="EJESA"
+    df_liq_ejesa["fecha_anterior"] = fecha_anterior
+    df_liq_ejesa["fecha_actual"] = fecha_actual
+    df_liq_ejesa["dias_medicion"] = dias_medicion
+    df_liq_ejesa["medicion_anterior"] = med_anterior
+    df_liq_ejesa["medicion_actual"] = med_actual
+    df_liq_ejesa["consumo"] = consumo
+    df_liq_ejesa["tipo_tarifa"] = tipo_tarifa
+    df_liq_ejesa["consumo_facturado"] = consumo_facturado
+    
+    if total_agua == "0,00":
+        df_final = df_liq_ejesa
+    else:
+        cuadro_5 = pagina.get_text("words", clip=rect_5)
+        cuadro_6 = pagina.get_text("words", clip=rect_6)
+        Lista_5 = [ (tupla[5], 1, tupla[4] ) for tupla in cuadro_5]
+        df_ag = pd.DataFrame(Lista_5, columns=['Fila', 'Col', 'Valor'])
+        df_ag = df_ag.pivot_table(index='Fila', columns='Col', values='Valor', aggfunc=lambda x: ' '.join(str(v) for v in x))
+        Lista_box5 = df_ag[1].tolist()
+        fecha_ant_agua = encontrar_concepto(Lista_box5,"ANTERIOR",1)
+        fecha_act_agua = encontrar_concepto(Lista_box5,"ACTUAL",1)
+        med_ant_agua = encontrar_concepto(Lista_box5,"ANTERIOR",2)
+        med_act_agua = encontrar_concepto(Lista_box5,"ACTUAL",2)
+        fecha_ant_agua = encontrar_concepto(Lista_box5,"ANTERIOR",1)
+        fecha_ant_agua = encontrar_concepto(Lista_box5,"ANTERIOR",1)
+        dias_medicion_agua = encontrar_concepto(Lista_box5,"DIFERENCIA",1)
+        consumo_agua = encontrar_concepto(Lista_box5,"DIFERENCIA",2)
+        uso_parametro = encontrar_concepto(Lista_box5,"USO",4)
+        consumo_facturado_agua = encontrar_concepto(Lista_box5,"DIFERENCIA",-1)
+        
+        Lista_box6 = [ ( round(tupla[3]*1.5/10), 1 if tupla[2] < 500 else 2, tupla[4] ) for tupla in cuadro_6]
+        tb_ag = pd.DataFrame(Lista_box6, columns=['Fila', 'Col', 'Valor'])
+        tb_ag = tb_ag.pivot_table(index='Fila', columns='Col', values='Valor', aggfunc=lambda x: ' '.join(str(v) for v in x)).reset_index()
+        tb_ag[1] = tb_ag[1].apply(quitar_tildes)
+        tb_ag["Grupo"] = tb_ag[1].apply(
+            lambda x: (
+                    x if isinstance(x, str) and x.upper() == "SERVICIOS SANITARIOS" and "SUBTOTAL" not in x #else x if isinstance(x, str) and x.upper() == x and "SUBTOTAL" not in x
+                else x if isinstance(x, str) and x.upper() == "TASAS E IMPUESTOS" and "SUBTOTAL" not in x
+                else x if isinstance(x, str) and x.upper() == "OTROS CONCEPTOS" and "SUBTOTAL" not in x
+                else None
+            )
+        )
+        tb_ag["Grupo"] = tb_ag["Grupo"].ffill()
+
+        tb_filtrado_ag = tb_ag[(~tb_ag[1].str.contains("TOTAL|SERVICIOS|OTROS|TASAS", case=True, na=False)) & (tb_ag[2].str.match(r"^\s*-?\d+[.,]?\d*\s*$", na=False))]
+        df_liq_agua = tb_filtrado_ag[["Grupo",1, 2]]
+        df_liq_agua.columns = ["Grupo", "Concepto", "Importe"]
+        df_liq_agua["Emp_serv"]="AGUA"
+        df_liq_agua["fecha_anterior"] = fecha_ant_agua
+        df_liq_agua["fecha_actual"] = fecha_act_agua
+        df_liq_agua["dias_medicion"] = dias_medicion_agua
+        df_liq_agua["medicion_anterior"] = med_ant_agua
+        df_liq_agua["medicion_actual"] = med_act_agua
+        df_liq_agua["consumo"] = consumo_agua
+        df_liq_agua["tipo_tarifa"] = uso_parametro
+        df_liq_agua["consumo_facturado"] = consumo_facturado_agua
+        df_final = pd.concat([df_liq_ejesa,df_liq_agua])
 
     # Diccionario final
     factura_dict = {
@@ -118,19 +176,9 @@ def procesar_factura(ruta_pdf):
         "total_ejesa": total_ejesa,
         "total_agua": total_agua,
         "total_pagar": total_pagar,
-        "fecha_anterior": fecha_anterior,
-        "fecha_actual": fecha_actual,
-        "dias_medicion": dias_medicion,
-        "med_anterior": med_anterior,
-        "med_actual": med_actual,
-        "consumo": consumo,
-        "tipo_tarifa": tipo_tarifa,
-        "consumo_facturado": consumo_facturado,
-        "detalle_liquidacion": df_liq.to_dict(orient="records")
+        "detalle_liquidacion": df_final.to_dict(orient="records")
     }
-
     return factura_dict
-
 
 resultados = []
 for archivo in os.listdir(carpeta):
@@ -147,7 +195,6 @@ df_exploded = df_final.explode("detalle_liquidacion")
 df_detalle = pd.json_normalize(df_exploded["detalle_liquidacion"])
 # 3. Combinar con las demás columnas
 df_facturas = pd.concat([df_exploded.drop(columns=["detalle_liquidacion"]), df_detalle], axis=1)
-
 
 df_facturas["Precio"] = df_facturas.apply(
     lambda row: (
@@ -168,3 +215,7 @@ df_facturas["Cantidad"] = df_facturas.apply(
     ),
     axis=1
 )
+
+df_facturas =df_facturas[["titular","DNIcuit","nro_factura","periodo","servicio","vencimiento","total_ejesa","total_agua",
+              "total_pagar","Emp_serv","fecha_anterior","fecha_actual","dias_medicion","medicion_anterior","medicion_actual",
+              "consumo","tipo_tarifa","consumo_facturado","Grupo","Concepto","Importe","Precio","Cantidad"]]
